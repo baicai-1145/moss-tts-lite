@@ -47,6 +47,11 @@ TEMPLATE = os.path.join(REPO, "README_hf.md")
 
 PKG_ROOT = Path(__file__).resolve().parents[1] / "moss_tts_lite"
 ALLOWED_THIRD_PARTY = {"torch", "numpy", "soundfile", "yaml"}
+# Training-only modules (optional deps, lazy imports -- never imported by the
+# inference core). They may import peft/bitsandbytes/transformers/torchaudio.
+TRAINING_MODULES = {"nn.py", "data.py", "train.py", "prepare_data.py"}
+TRAIN_ONLY_THIRD_PARTY = {"peft", "bitsandbytes", "transformers", "torchaudio",
+                          "accelerate", "safetensors"}
 
 def _collect_imports(path: Path) -> list[tuple[str, int, str]]:
     """Return (top_level_module, lineno, shown_name) for every Import / ImportFrom node anywhere in the file (module body, f..."""
@@ -74,13 +79,17 @@ def test_dep_purity():
 
     for f in files:
         rel = f.relative_to(PKG_ROOT.parent).as_posix()
+        is_training_module = f.name in TRAINING_MODULES
         try:
             imports = _collect_imports(f)
         except SyntaxError as e:
             raise AssertionError(f"{rel}: unparsable: {e}") from e
         for top, lineno, name in imports:
             seen.setdefault(top, set()).add(rel)
-            if top not in stdlib and top not in ALLOWED_THIRD_PARTY and top != "moss_tts_lite":
+            allowed = ALLOWED_THIRD_PARTY
+            if is_training_module:
+                allowed = allowed | TRAIN_ONLY_THIRD_PARTY
+            if top not in stdlib and top not in allowed and top != "moss_tts_lite":
                 violations.append(f"{rel}:{lineno}: import {name!r} (top={top!r})")
 
     assert not violations, (
@@ -89,8 +98,21 @@ def test_dep_purity():
 
     third = sorted(t for t in seen if t in ALLOWED_THIRD_PARTY)
     own = sorted(t for t in seen if t == "moss_tts_lite")
+    all_allowed = ALLOWED_THIRD_PARTY | TRAIN_ONLY_THIRD_PARTY
     other = sorted(t for t in seen if t not in stdlib
-                   and t not in ALLOWED_THIRD_PARTY and t != "moss_tts_lite")
+                   and t not in all_allowed and t != "moss_tts_lite")
+    # the inference core must never import the training extras or the
+    # training-only modules
+    core_files = [f for f in files if f.name not in TRAINING_MODULES]
+    for f in core_files:
+        rel = f.relative_to(PKG_ROOT.parent).as_posix()
+        for top, lineno, name in _collect_imports(f):
+            assert top not in TRAIN_ONLY_THIRD_PARTY, \
+                f"{rel}:{lineno}: inference core imports training dep {name!r}"
+            if top == "moss_tts_lite":
+                assert ".nn" not in name and not name.endswith(".train") \
+                    and ".data" not in name and ".prepare_data" not in name, \
+                    f"{rel}:{lineno}: inference core imports training module {name!r}"
     std_used = sorted(t for t in seen if t in stdlib)
     print(f"  scanned {len(files)} files under {PKG_ROOT.name}/")
     print(f"  third-party: {third}")

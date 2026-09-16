@@ -82,6 +82,10 @@ class QwenBPE:
             i: t for t, i in self._vocab.items()}
         self._cache: dict[str, list[int]] = {}
 
+    def id_to_added_token(self, token_id: int) -> str | None:
+        """Added-token string for an id (None when it is not an added token)."""
+        return self._id_to_added.get(int(token_id))
+
     def _match_added(self, text: str, i: int) -> str | None:
         for tok in self._added_by_first.get(text[i], ()):
             if text.startswith(tok, i):

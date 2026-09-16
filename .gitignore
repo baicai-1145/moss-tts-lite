@@ -8,3 +8,4 @@ models/
 libmoss_native.so
 _native/
 dist/
+uv.lock
